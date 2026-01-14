@@ -31,7 +31,6 @@ class VPFormatter:
         price_fmt = self.format_price(price)
         return f"{ean_fmt}{self.SEPARATOR}{desc_fmt}{self.SEPARATOR}{price_fmt}"
 
-# --- EXEMPLO DE USO (Teste Rápido) ---
 if __name__ == "__main__":
     converter = VPFormatter()
 
