@@ -2,17 +2,30 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
 import sys
+import threading
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.converter import GenericConverter
 
+try:
+    from src.core.vp_driver import VPDriver
+    HAS_DLL = True
+except ImportError:
+    HAS_DLL = False
+
 class PriceCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tanca/Jetway Importer Tool")
-        self.root.geometry("600x550")
+        self.root.title("Tanca/Jetway Importer & Server")
+        self.root.geometry("700x600")
         
+        # Variáveis de Controle do Servidor
+        self.server_running = False
+        self.products_db = {}
+        self.vp_driver = VPDriver("VP_v3.dll") if HAS_DLL else None
+
         # Estilo
         style = ttk.Style()
         style.theme_use('clam')
@@ -21,13 +34,17 @@ class PriceCheckerApp:
         self.notebook = ttk.Notebook(root)
         self.tab_analyze = ttk.Frame(self.notebook)
         self.tab_convert = ttk.Frame(self.notebook)
+        self.tab_server = ttk.Frame(self.notebook)
         
-        self.notebook.add(self.tab_analyze, text="🔍 Analisar Erros")
-        self.notebook.add(self.tab_convert, text="⚙️ Gerar Arquivo")
+        self.notebook.add(self.tab_analyze, text="🔍 Analisar")
+        self.notebook.add(self.tab_convert, text="⚙️ Converter")
+        self.notebook.add(self.tab_server, text="📡 Servidor Online (DLL)")
+        
         self.notebook.pack(expand=True, fill='both')
         
         self._setup_analyze_tab()
         self._setup_convert_tab()
+        self._setup_server_tab()
 
     def _setup_analyze_tab(self):
         frame = ttk.Frame(self.tab_analyze, padding=20)
@@ -130,6 +147,126 @@ class PriceCheckerApp:
         # Botão Converter
         btn_convert = ttk.Button(frame, text="FORMATAR E GERAR ARQUIVO", command=self._run_conversion)
         btn_convert.pack(fill='x', pady=20)
+
+# --- NOVA ABA SERVER ---
+    def _setup_server_tab(self):
+        frame = ttk.Frame(self.tab_server, padding=20)
+        frame.pack(fill='both', expand=True)
+
+        # Seleção da Base de Dados (O arquivo convertido)
+        lbl = ttk.Label(frame, text="1. Selecione o arquivo 'itens.txt' (Gerado na aba Converter):")
+        lbl.pack(anchor='w')
+        
+        file_frame = ttk.Frame(frame)
+        file_frame.pack(fill='x', pady=5)
+        self.entry_db_path = ttk.Entry(file_frame)
+        self.entry_db_path.pack(side='left', fill='x', expand=True, padx=(0,5))
+        ttk.Button(file_frame, text="...", command=lambda: self._select_file(self.entry_db_path)).pack(side='right')
+
+        # Controles do Servidor
+        ctrl_frame = ttk.LabelFrame(frame, text="Controle do Servidor (DLL)", padding=10)
+        ctrl_frame.pack(fill='x', pady=15)
+
+        self.btn_start = ttk.Button(ctrl_frame, text="▶ INICIAR SERVIDOR", command=self._toggle_server)
+        self.btn_start.pack(fill='x')
+        
+        self.lbl_status = ttk.Label(ctrl_frame, text="Status: Parado", foreground="red", font=("Arial", 10, "bold"))
+        self.lbl_status.pack(pady=5)
+
+        # Log do Servidor
+        ttk.Label(frame, text="Log de Consultas (Tempo Real):").pack(anchor='w')
+        self.server_log = scrolledtext.ScrolledText(frame, height=10, state='disabled')
+        self.server_log.pack(fill='both', expand=True)
+
+    def _log_server(self, msg):
+        self.server_log.config(state='normal')
+        self.server_log.insert(tk.END, f"{time.strftime('%H:%M:%S')} - {msg}\n")
+        self.server_log.see(tk.END)
+        self.server_log.config(state='disabled')
+
+    def _load_database(self):
+        """Lê o arquivo itens.txt para memória para consulta rápida"""
+        path = self.entry_db_path.get()
+        if not os.path.exists(path):
+            messagebox.showerror("Erro", "Arquivo de produtos não encontrado!")
+            return False
+
+        self.products_db = {}
+        try:
+            with open(path, 'r', encoding='latin-1') as f:
+                for line in f:
+                    if '|' in line:
+                        parts = line.split('|')
+                        if len(parts) >= 3:
+                            ean = parts[0].strip() # '0000000012345'
+                            desc = parts[1].strip()
+                            preco_raw = parts[2].strip() # '0000002590'
+                            
+                            # Formata preço para exibição visual (R$ 25,90)
+                            try:
+                                val = float(preco_raw) / 100
+                                preco_fmt = f"R$ {val:.2f}".replace('.', ',')
+                            except:
+                                preco_fmt = "R$ 0,00"
+
+                            # Remove zeros a esquerda do EAN para facilitar busca
+                            ean_int = str(int(ean)) 
+                            self.products_db[ean_int] = {"desc": desc, "price": preco_fmt}
+            
+            self._log_server(f"Base carregada: {len(self.products_db)} produtos.")
+            return True
+        except Exception as e:
+            messagebox.showerror("Erro ao ler base", str(e))
+            return False
+
+    def _toggle_server(self):
+        if not HAS_DLL:
+            messagebox.showerror("Erro", "VP_v3.dll não encontrada ou erro no driver!")
+            return
+
+        if not self.server_running:
+            # INICIAR
+            if not self._load_database(): return
+            
+            if self.vp_driver.start_server(port=6500):
+                self.server_running = True
+                self.btn_start.config(text="⏹ PARAR SERVIDOR")
+                self.lbl_status.config(text="Status: RODANDO (Porta 6500)", foreground="green")
+                self._log_server("Servidor iniciado. Aguardando conexões...")
+                
+                # Inicia Thread para não travar a GUI
+                self.thread = threading.Thread(target=self._server_loop, daemon=True)
+                self.thread.start()
+            else:
+                messagebox.showerror("Erro", "Falha ao iniciar Listener da DLL.")
+        else:
+            # PARAR (Na verdade só paramos o loop, a DLL pode precisar de reinicio)
+            self.server_running = False
+            self.btn_start.config(text="▶ INICIAR SERVIDOR")
+            self.lbl_status.config(text="Status: Parado", foreground="red")
+            self._log_server("Servidor parado.")
+
+    def _server_loop(self):
+        """Loop infinito que roda em background verificando a DLL"""
+        while self.server_running:
+            # 1. Verifica se tem mensagem
+            ip, ean = self.vp_driver.check_requests()
+            
+            if ean:
+                # Remove zeros a esquerda para buscar no dict
+                ean_clean = str(int(ean))
+                self._log_server(f"Consulta de {ip}: EAN {ean}")
+
+                if ean_clean in self.products_db:
+                    prod = self.products_db[ean_clean]
+                    # Envia resposta
+                    self.vp_driver.send_price(ip, prod['desc'], prod['price'])
+                    self._log_server(f" -> Respondido: {prod['desc']} - {prod['price']}")
+                else:
+                    self.vp_driver.send_price(ip, "PRODUTO NAO", "CADASTRADO")
+                    self._log_server(" -> Produto não encontrado.")
+
+            time.sleep(0.1) # Evita uso de 100% da CPU
 
     def _toggle_inputs(self):
         mode = self.var_layout.get()
