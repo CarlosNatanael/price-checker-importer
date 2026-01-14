@@ -5,7 +5,7 @@ import time
 from typing import Tuple
 
 class VPDriver:
-    def __init__(self, dll_path: str = "VP_v3.dll"):
+    def __init__(self, dll_path: str = "VP_v3_x64.dll"):
         self.dll = None
         self.is_running = False
         try:
@@ -63,3 +63,10 @@ class VPDriver:
         b_l1 = line1[:20].ljust(20).encode('ascii')
         b_l2 = line2[:20].ljust(20).encode('ascii')
         self.dll.bSendProdPrice(b_ip, b_l1, b_l2)
+
+    def get_connected_count(self) -> int:
+        if not self.dll: return 0
+        try:
+            return self.dll.GetTabConectados()
+        except:
+            return 0

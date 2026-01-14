@@ -24,7 +24,7 @@ class PriceCheckerApp:
         # Variáveis de Controle do Servidor
         self.server_running = False
         self.products_db = {}
-        self.vp_driver = VPDriver("VP_v3.dll") if HAS_DLL else None
+        self.vp_driver = VPDriver("VP_v3_x64.dll") if HAS_DLL else None
 
         # Estilo
         style = ttk.Style()
@@ -153,7 +153,6 @@ class PriceCheckerApp:
         frame = ttk.Frame(self.tab_server, padding=20)
         frame.pack(fill='both', expand=True)
 
-        # Seleção da Base de Dados (O arquivo convertido)
         lbl = ttk.Label(frame, text="1. Selecione o arquivo 'itens.txt' (Gerado na aba Converter):")
         lbl.pack(anchor='w')
         
@@ -198,21 +197,17 @@ class PriceCheckerApp:
                     if '|' in line:
                         parts = line.split('|')
                         if len(parts) >= 3:
-                            ean = parts[0].strip() # '0000000012345'
+                            ean = parts[0].strip()
                             desc = parts[1].strip()
-                            preco_raw = parts[2].strip() # '0000002590'
-                            
-                            # Formata preço para exibição visual (R$ 25,90)
+                            preco_raw = parts[2].strip()
                             try:
                                 val = float(preco_raw) / 100
                                 preco_fmt = f"R$ {val:.2f}".replace('.', ',')
                             except:
                                 preco_fmt = "R$ 0,00"
 
-                            # Remove zeros a esquerda do EAN para facilitar busca
                             ean_int = str(int(ean)) 
                             self.products_db[ean_int] = {"desc": desc, "price": preco_fmt}
-            
             self._log_server(f"Base carregada: {len(self.products_db)} produtos.")
             return True
         except Exception as e:
@@ -225,7 +220,6 @@ class PriceCheckerApp:
             return
 
         if not self.server_running:
-            # INICIAR
             if not self._load_database(): return
             
             if self.vp_driver.start_server(port=6500):
@@ -233,14 +227,12 @@ class PriceCheckerApp:
                 self.btn_start.config(text="⏹ PARAR SERVIDOR")
                 self.lbl_status.config(text="Status: RODANDO (Porta 6500)", foreground="green")
                 self._log_server("Servidor iniciado. Aguardando conexões...")
-                
-                # Inicia Thread para não travar a GUI
+
                 self.thread = threading.Thread(target=self._server_loop, daemon=True)
                 self.thread.start()
             else:
                 messagebox.showerror("Erro", "Falha ao iniciar Listener da DLL.")
         else:
-            # PARAR (Na verdade só paramos o loop, a DLL pode precisar de reinicio)
             self.server_running = False
             self.btn_start.config(text="▶ INICIAR SERVIDOR")
             self.lbl_status.config(text="Status: Parado", foreground="red")
@@ -248,25 +240,31 @@ class PriceCheckerApp:
 
     def _server_loop(self):
         """Loop infinito que roda em background verificando a DLL"""
+        last_count = -1
+        
         while self.server_running:
-            # 1. Verifica se tem mensagem
+
+            if self.vp_driver:
+                count = self.vp_driver.get_connected_count()
+                if count != last_count:
+                    self.lbl_status.config(text=f"Status: RODANDO | Conectados: {count}", foreground="green")
+                    if count > last_count:
+                        self._log_server(f"Novo terminal conectado! Total: {count}")
+                    last_count = count
             ip, ean = self.vp_driver.check_requests()
             
             if ean:
-                # Remove zeros a esquerda para buscar no dict
                 ean_clean = str(int(ean))
                 self._log_server(f"Consulta de {ip}: EAN {ean}")
 
                 if ean_clean in self.products_db:
                     prod = self.products_db[ean_clean]
-                    # Envia resposta
                     self.vp_driver.send_price(ip, prod['desc'], prod['price'])
                     self._log_server(f" -> Respondido: {prod['desc']} - {prod['price']}")
                 else:
                     self.vp_driver.send_price(ip, "PRODUTO NAO", "CADASTRADO")
                     self._log_server(" -> Produto não encontrado.")
-
-            time.sleep(0.1) # Evita uso de 100% da CPU
+            time.sleep(0.1)
 
     def _toggle_inputs(self):
         mode = self.var_layout.get()
@@ -368,7 +366,6 @@ class PriceCheckerApp:
                 config["map"]["desc"] = int(self.entry_desc.get())
                 config["map"]["price"] = int(self.entry_price.get())
             else:
-                # Parser de "Inicio,Tamanho" -> (Inicio, Tamanho)
                 def parse_tuple(s):
                     parts = s.split(',')
                     return (int(parts[0]), int(parts[1]))
