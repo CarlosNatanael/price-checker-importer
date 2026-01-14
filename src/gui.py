@@ -243,28 +243,49 @@ class PriceCheckerApp:
         last_count = -1
         
         while self.server_running:
+            try:
+                # 1. Verifica conexões (Só se o driver estiver ativo)
+                if self.vp_driver:
+                    # Proteção extra: verifica se a função existe antes de chamar
+                    if hasattr(self.vp_driver, 'get_connected_count'):
+                        count = self.vp_driver.get_connected_count()
+                        
+                        if count != last_count:
+                            # USA O MÉTODO SEGURO
+                            self._safe_update_status(f"Status: RODANDO | Conectados: {count}", "green")
+                            
+                            if count > last_count:
+                                self._safe_log(f"Novo terminal conectado! Total: {count}")
+                            
+                            last_count = count
 
-            if self.vp_driver:
-                count = self.vp_driver.get_connected_count()
-                if count != last_count:
-                    self.lbl_status.config(text=f"Status: RODANDO | Conectados: {count}", foreground="green")
-                    if count > last_count:
-                        self._log_server(f"Novo terminal conectado! Total: {count}")
-                    last_count = count
-            ip, ean = self.vp_driver.check_requests()
+                # 2. Verifica se tem mensagem (Código de Barras)
+                if self.vp_driver:
+                    ip, ean = self.vp_driver.check_requests()
+                    
+                    if ean:
+                        # Remove zeros a esquerda para buscar no dict
+                        try:
+                            ean_clean = str(int(ean))
+                        except ValueError:
+                            ean_clean = ean # Caso venha lixo não numérico
+
+                        self._safe_log(f"Consulta de {ip}: EAN {ean}")
+
+                        if ean_clean in self.products_db:
+                            prod = self.products_db[ean_clean]
+                            # Envia resposta
+                            self.vp_driver.send_price(ip, prod['desc'], prod['price'])
+                            self._safe_log(f" -> Respondido: {prod['desc']} - {prod['price']}")
+                        else:
+                            self.vp_driver.send_price(ip, "PRODUTO NAO", "CADASTRADO")
+                            self._safe_log(" -> Produto não encontrado.")
             
-            if ean:
-                ean_clean = str(int(ean))
-                self._log_server(f"Consulta de {ip}: EAN {ean}")
-
-                if ean_clean in self.products_db:
-                    prod = self.products_db[ean_clean]
-                    self.vp_driver.send_price(ip, prod['desc'], prod['price'])
-                    self._log_server(f" -> Respondido: {prod['desc']} - {prod['price']}")
-                else:
-                    self.vp_driver.send_price(ip, "PRODUTO NAO", "CADASTRADO")
-                    self._log_server(" -> Produto não encontrado.")
-            time.sleep(0.1)
+            except Exception as e:
+                print(f"Erro na Thread do Servidor: {e}")
+                # Não logamos na GUI para evitar loop de erro, apenas no console
+            
+            time.sleep(0.1) # Pausa vital para não travar a CPU
 
     def _toggle_inputs(self):
         mode = self.var_layout.get()
@@ -387,6 +408,15 @@ class PriceCheckerApp:
             messagebox.showerror("Erro", "Valores de mapeamento inválidos. Use números inteiros.")
         except Exception as e:
             messagebox.showerror("Erro", f"Falha na conversão: {str(e)}")
+
+# --- MÉTODOS DE SEGURANÇA PARA THREADS ---
+    def _safe_update_status(self, text, color):
+        """Agenda a atualização do status na thread principal"""
+        self.root.after(0, lambda: self.lbl_status.config(text=text, foreground=color))
+
+    def _safe_log(self, msg):
+        """Agenda o log na thread principal"""
+        self.root.after(0, lambda: self._log_server(msg))
 
 if __name__ == "__main__":
     root = tk.Tk()
