@@ -320,7 +320,6 @@ class PriceCheckerApp:
             entry.insert(0, path)
 
     def _run_analysis(self):
-        """Lógica simples para validar o arquivo sem converter"""
         path = self.entry_analyze_file.get()
         delim = self.entry_analyze_delim.get()
         
@@ -329,37 +328,67 @@ class PriceCheckerApp:
             return
 
         self.txt_log.delete(1.0, tk.END)
-        self.txt_log.insert(tk.END, f"Iniciando análise de: {path}\n\n")
+        self.txt_log.insert(tk.END, f"Iniciando análise rigorosa de: {path}\n")
+        self.txt_log.insert(tk.END, f"Critérios: EAN >= 13, Desc >= 20, Preço >= 20 chars.\n\n")
         
-        erros = 0
+        erros_total = 0
         linhas_ok = 0
         
         try:
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(path, 'r', encoding='latin-1', errors='replace') as f:
                 for i, line in enumerate(f):
-                    line = line.strip()
-                    if not line: continue
+                    line_clean = line.rstrip('\n').rstrip('\r')
                     
-                    parts = line.split(delim)
+                    if not line_clean: continue
                     
-                    # Validação 1: Quantidade de colunas
+                    parts = line_clean.split(delim)
+                    num_linha = i + 1
+                    linha_com_erro = False
+                    msg_erro = []
+
                     if len(parts) < 3:
-                        self.txt_log.insert(tk.END, f"[Linha {i+1}] ERRO: Apenas {len(parts)} colunas encontradas (esperado min 3).\n", "error")
-                        erros += 1
-                        continue
+                        msg_erro.append(f"Faltam colunas (Encontrado: {len(parts)} | Esperado: 3+)")
+                        linha_com_erro = True
+                    else:
+                        raw_ean = parts[0]
+                        raw_desc = parts[1]
+                        raw_price = parts[2]
+
+                        if len(raw_ean) < 13:
+                            msg_erro.append(f"EAN curto ({len(raw_ean)} chars < 13)")
+                            linha_com_erro = True
                         
-                    # Validação 2: Preço numérico?
-                    possivel_preco = parts[-1] if parts[-1] else parts[-2]
-                    clean_price = possivel_preco.replace('R$', '').replace('.', '').replace(',', '').strip()
-                    
-                    if not clean_price.isdigit():
-                         self.txt_log.insert(tk.END, f"[Linha {i+1}] AVISO: Preço '{possivel_preco}' parece inválido.\n")
-                         erros += 1
+                        if len(raw_desc) < 20:
+                            msg_erro.append(f"Descrição curta ({len(raw_desc)} chars < 20). Falta preencher com espaços?")
+                            linha_com_erro = True
+
+                        if len(raw_price) < 20:
+                            msg_erro.append(f"Campo Preço curto ({len(raw_price)} chars < 20)")
+                            linha_com_erro = True
+                        
+                        price_digits = raw_price.replace(' ', '').replace('.', '').replace(',', '')
+                        if not price_digits.isdigit():
+                             msg_erro.append(f"Preço contém caracteres inválidos: '{raw_price.strip()}'")
+                             linha_com_erro = True
+
+                    # Resultado da Linha
+                    if linha_com_erro:
+                        erros_total += 1
+                        self.txt_log.insert(tk.END, f"[Linha {num_linha}] ERRO: {', '.join(msg_erro)}\n", "error")
+                        self.txt_log.insert(tk.END, f"   -> Conteúdo: '{line_clean}'\n", "info")
                     else:
                         linhas_ok += 1
             
-            self.txt_log.insert(tk.END, f"\n--- Resumo ---\nLinhas OK: {linhas_ok}\nLinhas com Problemas: {erros}")
+            self.txt_log.insert(tk.END, f"\n--- Resumo ---\n")
+            self.txt_log.insert(tk.END, f"Linhas Corretas (Padrão Tanca): {linhas_ok}\n")
+            if erros_total > 0:
+                self.txt_log.insert(tk.END, f"Linhas com ERRO: {erros_total}\n", "error")
+            else:
+                self.txt_log.insert(tk.END, f"SUCESSO: Arquivo 100% validado!\n", "success")
+
             self.txt_log.tag_config("error", foreground="red")
+            self.txt_log.tag_config("success", foreground="green")
+            self.txt_log.tag_config("info", foreground="gray")
 
         except Exception as e:
             messagebox.showerror("Erro Crítico", str(e))
